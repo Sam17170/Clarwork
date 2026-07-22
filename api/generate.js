@@ -57,6 +57,8 @@ async function logGeneration(ip) {
   const { error } = await supabase.from('generation_logs').insert({ ip });
   if (error) console.error('Erreur log génération (non bloquante):', error);
 }
+
+function sanitizeInput(str, maxLength = 200) {
   if (!str) return '';
   return String(str)
     .replace(/<[^>]*>/g, '') // retire toute balise HTML/JS injectée
