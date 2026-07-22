@@ -21,7 +21,7 @@ const SECTEUR_TO_KEYWORD = {
   'fleuriste': 'florist flower shop',
 };
 
-const MAX_GENERATIONS_PAR_JOUR = 3;
+const MAX_GENERATIONS_PAR_JOUR = 50;
 
 function getClientIp(req) {
   const forwarded = req.headers['x-forwarded-for'];
