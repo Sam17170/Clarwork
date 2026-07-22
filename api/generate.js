@@ -194,10 +194,14 @@ export default async function handler(req, res) {
 
     const claudeData = await claudeRes.json();
    console.log('DEBUG - claudeData:', JSON.stringify(claudeData).slice(0, 800));
+  
     let html = '';
-    if (claudeData.content && claudeData.content[0] && claudeData.content[0].text) {
-      html = claudeData.content[0].text;
-    }
+if (claudeData.content && Array.isArray(claudeData.content)) {
+  const textBlock = claudeData.content.find(function (block) {
+    return block.type === 'text';
+  });
+  if (textBlock) html = textBlock.text;
+}
 
     const docTypeIndex = html.indexOf('<!DOCTYPE html>');
     if (docTypeIndex > 0) html = html.slice(docTypeIndex);
