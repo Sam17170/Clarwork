@@ -1,11 +1,35 @@
 // api/generate.js
+// Fonction serverless Vercel — appelée par le formulaire React en POST.
+// Étapes : 1) sanitize des inputs  2) recherche photo Pexels si besoin
+// 3) construction du prompt système  4) appel API Claude  5) sauvegarde
+// du lead partiel dans Supabase (avant même que l'email soit fourni).
+
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY // clé serveur, jamais exposée au client
 );
 
+// Petit dictionnaire de traduction secteur -> mot-clé anglais pour Pexels.
+// Complète cette liste au fil des secteurs que tu rencontres le plus souvent.
+const SECTEUR_TO_KEYWORD = {
+  'boulangerie': 'bakery bread',
+  'boulangerie artisanale': 'artisan bakery',
+  'plombier': 'plumber pipe repair',
+  'plombier-chauffagiste': 'plumber heating repair',
+  'paysagiste': 'gardener landscaping',
+  'restaurant': 'restaurant chef kitchen',
+  'coiffeur': 'hair salon stylist',
+  'électricien': 'electrician wiring',
+  'menuisier': 'carpenter woodworking',
+  'garage automobile': 'car mechanic garage',
+  'institut de beauté': 'beauty salon spa',
+  'fleuriste': 'florist flower shop',
+};
+
+// Nombre maximum de générations gratuites autorisées par IP sur 24h.
+// Ajuste ce chiffre selon ton budget (chaque génération coûte ~0,03-0,06$ avec Sonnet 5).
 const MAX_GENERATIONS_PAR_JOUR = 3;
 
 function getClientIp(req) {
@@ -24,7 +48,7 @@ async function checkRateLimit(ip) {
 
   if (error) {
     console.error('Erreur vérification rate-limit (on laisse passer):', error);
-    return true;
+    return true; // en cas d'erreur technique, on ne bloque pas l'utilisateur légitime
   }
   return (count || 0) < MAX_GENERATIONS_PAR_JOUR;
 }
@@ -33,27 +57,9 @@ async function logGeneration(ip) {
   const { error } = await supabase.from('generation_logs').insert({ ip });
   if (error) console.error('Erreur log génération (non bloquante):', error);
 }
-
-const SECTEUR_TO_KEYWORD = {
-  'boulangerie': 'bakery bread',
-  'boulangerie artisanale': 'artisan bakery',
-  'plombier': 'plumber pipe repair',
-  'plombier-chauffagiste': 'plumber heating repair',
-  'paysagiste': 'gardener landscaping',
-  'restaurant': 'restaurant chef kitchen',
-  'restaurant de camping': 'restaurant lakeside terrace',
-  'coiffeur': 'hair salon stylist',
-  'électricien': 'electrician wiring',
-  'menuisier': 'carpenter woodworking',
-  'garage automobile': 'car mechanic garage',
-  'institut de beauté': 'beauty salon spa',
-  'fleuriste': 'florist flower shop',
-};
-
-function sanitizeInput(str, maxLength = 200) {
   if (!str) return '';
   return String(str)
-    .replace(/<[^>]*>/g, '')
+    .replace(/<[^>]*>/g, '') // retire toute balise HTML/JS injectée
     .replace(/[\r\n]+/g, ' ')
     .trim()
     .slice(0, maxLength);
@@ -118,10 +124,12 @@ export default async function handler(req, res) {
       ton, particularite, formule, photosUrls = [],
     } = req.body;
 
+    // 1. Validation minimale
     if (!nomEntreprise || !secteur || !ville || !formule) {
       return res.status(400).json({ error: 'Champs obligatoires manquants' });
     }
 
+    // 1bis. Rate-limiting par IP — bloque avant tout appel payant à Claude
     const clientIp = getClientIp(req);
     const withinLimit = await checkRateLimit(clientIp);
     if (!withinLimit) {
@@ -130,6 +138,7 @@ export default async function handler(req, res) {
       });
     }
 
+    // 2. Sanitize de tous les champs texte libre (protection contre l'injection de prompt)
     const clean = {
       nomEntreprise: sanitizeInput(nomEntreprise, 100),
       secteur: sanitizeInput(secteur, 100),
@@ -141,11 +150,13 @@ export default async function handler(req, res) {
       formule: formule === 'signature' ? 'signature' : 'essentiel',
     };
 
+    // 3. Photos : celles du client en priorité, sinon recherche Pexels
     let finalPhotos = Array.isArray(photosUrls) ? photosUrls.slice(0, 6) : [];
     if (finalPhotos.length === 0) {
       finalPhotos = await fetchPexelsPhotos(clean.secteur, clean.formule === 'signature' ? 4 : 1);
     }
 
+    // 4. Construction du prompt et appel à l'API Claude
     const systemPrompt = buildSystemPrompt({ ...clean, photosUrls: finalPhotos });
     const maxTokens = clean.formule === 'signature' ? 6000 : 3000;
 
@@ -173,9 +184,11 @@ export default async function handler(req, res) {
     const claudeData = await claudeRes.json();
     let html = claudeData.content?.[0]?.text || '';
 
+    // Sécurité : si le modèle a ajouté du texte parasite avant le HTML, on tronque
     const docTypeIndex = html.indexOf('<!DOCTYPE html>');
     if (docTypeIndex > 0) html = html.slice(docTypeIndex);
 
+    // 5. Sauvegarde du lead partiel (avant email) — permet la relance même en cas d'abandon
     const { data: lead, error: dbError } = await supabase
       .from('prospects')
       .insert({
@@ -189,4 +202,14 @@ export default async function handler(req, res) {
       .select()
       .single();
 
-    if (dbError) console.error('Erreur
+    if (dbError) console.error('Erreur Supabase (non bloquante):', dbError);
+
+    // Log de la génération pour le rate-limiting (après coup, une fois le succès confirmé)
+    await logGeneration(clientIp);
+
+    return res.status(200).json({ html, leadId: lead?.id || null });
+  } catch (err) {
+    console.error('Erreur inattendue:', err);
+    return res.status(500).json({ error: 'Erreur serveur' });
+  }
+}
