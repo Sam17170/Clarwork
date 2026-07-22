@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+// Palettes prédéfinies — l'utilisateur clique, aucune saisie de couleur libre
 const PALETTES = [
   { nom: 'Nature & lac', hex: '#16423C, #E8A33D, #EDE4D3, #8FA8A6' },
   { nom: 'Chaleureux artisanal', hex: '#3E2724, #C9932F, #F6EEDD, #A63D2F' },
@@ -10,7 +11,7 @@ const PALETTES = [
 const TONS = ['Familial', 'Chic & haut de gamme', 'Rustique & authentique', 'Moderne & dynamique'];
 
 export default function GeneratorForm() {
-  const [step, setStep] = useState('form');
+  const [step, setStep] = useState('form'); // 'form' | 'loading' | 'result' | 'contact'
   const [resultHtml, setResultHtml] = useState('');
   const [leadId, setLeadId] = useState(null);
   const [error, setError] = useState('');
