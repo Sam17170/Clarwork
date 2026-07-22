@@ -169,7 +169,7 @@ export default async function handler(req, res) {
       formule: clean.formule,
     });
 
-    const maxTokens = clean.formule === 'signature' ? 6000 : 3000;
+    const maxTokens = clean.formule === 'signature' ? 16000 : 8000;
 
     const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
