@@ -5,7 +5,7 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
-
+console.log('DEBUG - SUPABASE_URL =', JSON.stringify(process.env.SUPABASE_URL));
 const SECTEUR_TO_KEYWORD = {
   'boulangerie': 'bakery bread',
   'boulangerie artisanale': 'artisan bakery',
