@@ -5,7 +5,7 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
-console.log('DEBUG - SUPABASE_URL =', JSON.stringify(process.env.SUPABASE_URL));
+
 const SECTEUR_TO_KEYWORD = {
   'boulangerie': 'bakery bread',
   'boulangerie artisanale': 'artisan bakery',
@@ -21,7 +21,7 @@ const SECTEUR_TO_KEYWORD = {
   'fleuriste': 'florist flower shop',
 };
 
-const MAX_GENERATIONS_PAR_JOUR = 50;
+const MAX_GENERATIONS_PAR_JOUR = 20;
 
 function getClientIp(req) {
   const forwarded = req.headers['x-forwarded-for'];
@@ -96,14 +96,22 @@ function buildSystemPrompt(params) {
   prompt += '- Particularite de l entreprise: ' + particulariteTexte + '\n';
   prompt += '- Photos disponibles (a integrer en balise img): ' + photosTexte + '\n';
   prompt += '- Formule commandee: ' + formule + '\n\n';
+
+  prompt += 'Avant d ecrire le moindre code, raisonne en interne (sans l ecrire dans ta reponse) sur ces 3 points :\n';
+  prompt += '1. A quelle famille appartient ce secteur : artisanat/technique (plombier, electricien, macon), commerce/restauration (boulangerie, restaurant, epicerie), sante/bien-etre (coiffeur, institut, kine), hebergement/loisirs (camping, hotel, gite), ou service professionnel (comptable, avocat, consultant) ?\n';
+  prompt += '2. Quel est le bon verbe d action pour cette famille : Demander un devis pour l artisanat/technique et les services professionnels, Reserver une table pour la restauration, Prendre rendez-vous pour la sante/bien-etre, Reserver pour l hebergement.\n';
+  prompt += '3. Quels intitules de section ont vraiment du sens pour ce metier precis, plutot que des intitules generiques. Exemples: un restaurant a une carte, pas une liste de services. Un plombier a des prestations, pas une carte. Un institut de beaute a des soins, pas un menu.\n\n';
+
   prompt += 'Regles de design (imperatives):\n';
   prompt += '1. Choisis une paire de polices Google Fonts adaptee au secteur et au ton.\n';
-  prompt += '2. Cree UN element signature propre au secteur, pas une liste generique de 3 services avec icones.\n';
+  prompt += '2. Cree UN element signature propre au secteur reel indique, pense-le comme si tu concevais ce site pour la premiere fois, pas un gabarit recycle. Refuse-toi a reutiliser mecaniquement le meme type d element (frise horaire, ticket de caisse, badge circulaire) d une generation a l autre : choisis celui qui raconte vraiment quelque chose de specifique a ce metier et cette particularite.\n';
   prompt += '3. Site 100% responsive avec menu mobile hamburger fonctionnel en JS natif, sous 768px.\n';
   prompt += '4. Utilise les photos fournies en balise img, ne jamais laisser de zone vide.\n';
-  prompt += '5. Le texte doit refleter le ton demande et integrer la particularite comme element central.\n';
-  prompt += '6. Aucun prix affiche. Chaque section se termine par un bouton Demander un devis.\n';
-  prompt += '7. Aucun faux avis, fausse statistique ou fausse etude de cas.\n\n';
+  prompt += '5. Le texte doit refleter le ton demande et integrer la particularite comme element central, pas comme detail secondaire noye dans un paragraphe.\n';
+  prompt += '6. Aucun prix affiche. Utilise le verbe d action identifie a l etape de raisonnement (devis, reservation, rendez-vous...), jamais Demander un devis par defaut si ca n a pas de sens pour ce secteur.\n';
+  prompt += '7. Aucun faux avis, fausse statistique ou fausse etude de cas.\n';
+  prompt += '8. Verifie la coherence globale avant de conclure : les intitules de section, le vocabulaire employe et le call-to-action doivent tous appartenir au meme univers metier, sans terme qui jure ou qui vient d un autre secteur.\n\n';
+
   prompt += 'Structure selon la formule:\n';
   prompt += 'Si formule est essentiel: site one-page en 4 sections (header simple, hero, services 3-4 elements, contact).\n';
   prompt += 'Si formule est signature: site one-page enrichi en 7 sections (header et nav complete, hero, galerie photo, services detailles, element signature developpe, zones d intervention si pertinent, contact avec vrai formulaire).\n\n';
@@ -193,15 +201,14 @@ export default async function handler(req, res) {
     }
 
     const claudeData = await claudeRes.json();
-   console.log('DEBUG - claudeData:', JSON.stringify(claudeData).slice(0, 800));
-  
+
     let html = '';
-if (claudeData.content && Array.isArray(claudeData.content)) {
-  const textBlock = claudeData.content.find(function (block) {
-    return block.type === 'text';
-  });
-  if (textBlock) html = textBlock.text;
-}
+    if (claudeData.content && Array.isArray(claudeData.content)) {
+      const textBlock = claudeData.content.find(function (block) {
+        return block.type === 'text';
+      });
+      if (textBlock) html = textBlock.text;
+    }
 
     const docTypeIndex = html.indexOf('<!DOCTYPE html>');
     if (docTypeIndex > 0) html = html.slice(docTypeIndex);
