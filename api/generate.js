@@ -1,18 +1,11 @@
 // api/generate.js
-// Fonction serverless Vercel — appelée par le formulaire React en POST.
-// Étapes : 1) sanitize des inputs  2) recherche photo Pexels si besoin
-// 3) construction du prompt système  4) appel API Claude  5) sauvegarde
-// du lead partiel dans Supabase (avant même que l'email soit fourni).
-
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY // clé serveur, jamais exposée au client
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// Petit dictionnaire de traduction secteur -> mot-clé anglais pour Pexels.
-// Complète cette liste au fil des secteurs que tu rencontres le plus souvent.
 const SECTEUR_TO_KEYWORD = {
   'boulangerie': 'bakery bread',
   'boulangerie artisanale': 'artisan bakery',
@@ -28,8 +21,6 @@ const SECTEUR_TO_KEYWORD = {
   'fleuriste': 'florist flower shop',
 };
 
-// Nombre maximum de générations gratuites autorisées par IP sur 24h.
-// Ajuste ce chiffre selon ton budget (chaque génération coûte ~0,03-0,06$ avec Sonnet 5).
 const MAX_GENERATIONS_PAR_JOUR = 3;
 
 function getClientIp(req) {
@@ -48,7 +39,7 @@ async function checkRateLimit(ip) {
 
   if (error) {
     console.error('Erreur vérification rate-limit (on laisse passer):', error);
-    return true; // en cas d'erreur technique, on ne bloque pas l'utilisateur légitime
+    return true;
   }
   return (count || 0) < MAX_GENERATIONS_PAR_JOUR;
 }
@@ -58,30 +49,183 @@ async function logGeneration(ip) {
   if (error) console.error('Erreur log génération (non bloquante):', error);
 }
 
-function sanitizeInput(str, maxLength = 200) {
+function sanitizeInput(str, maxLength) {
+  if (maxLength === undefined) maxLength = 200;
   if (!str) return '';
   return String(str)
-    .replace(/<[^>]*>/g, '') // retire toute balise HTML/JS injectée
+    .replace(/<[^>]*>/g, '')
     .replace(/[\r\n]+/g, ' ')
     .trim()
     .slice(0, maxLength);
 }
 
-async function fetchPexelsPhotos(secteur, count = 4) {
+async function fetchPexelsPhotos(secteur, count) {
+  if (count === undefined) count = 4;
   const keyword = SECTEUR_TO_KEYWORD[secteur.toLowerCase()] || secteur;
-  const res = await fetch(
-    `https://api.pexels.com/v1/search?query=${encodeURIComponent(keyword)}&per_page=${count}&orientation=landscape`,
-    { headers: { Authorization: process.env.PEXELS_API_KEY } }
-  );
+  const url = 'https://api.pexels.com/v1/search?query=' + encodeURIComponent(keyword) + '&per_page=' + count + '&orientation=landscape';
+  const res = await fetch(url, { headers: { Authorization: process.env.PEXELS_API_KEY } });
   if (!res.ok) return [];
   const data = await res.json();
-  return (data.photos || []).map((p) => p.src.large);
+  return (data.photos || []).map(function (p) { return p.src.large; });
 }
 
-function buildSystemPrompt({
-  nomEntreprise, secteur, ville, paletteNom, paletteHex,
-  ton, particularite, photosUrls, formule,
-}) {
-  return `Tu es un générateur expert de sites vitrine HTML/CSS pour des TPE et PME françaises.
-Tu reçois les informations d'une entreprise et tu génères un aperçu de site vitrine
-en un seul fichier HTML autonome (CSS inline dans une balise
+function buildSystemPrompt(params) {
+  const nomEntreprise = params.nomEntreprise;
+  const secteur = params.secteur;
+  const ville = params.ville;
+  const paletteNom = params.paletteNom;
+  const paletteHex = params.paletteHex;
+  const ton = params.ton;
+  const particularite = params.particularite;
+  const photosUrls = params.photosUrls;
+  const formule = params.formule;
+
+  const particulariteTexte = particularite ? particularite : 'aucune précisée, reste générique mais crédible';
+  const photosTexte = photosUrls.length > 0 ? photosUrls.join(', ') : 'aucune';
+
+  let prompt = 'Tu es un générateur expert de sites vitrine HTML/CSS pour des TPE et PME françaises. ';
+  prompt += 'Tu reçois les informations d une entreprise et tu génères un aperçu de site vitrine ';
+  prompt += 'en un seul fichier HTML autonome (CSS inline dans une balise style, pas de dépendances externes sauf Google Fonts).\n\n';
+  prompt += 'Informations de l entreprise:\n';
+  prompt += '- Nom: ' + nomEntreprise + '\n';
+  prompt += '- Secteur d activite: ' + secteur + '\n';
+  prompt += '- Ville: ' + ville + '\n';
+  prompt += '- Palette de couleurs a utiliser (respecte STRICTEMENT ces couleurs): ' + paletteHex + '\n';
+  prompt += '- Nom de la palette: ' + paletteNom + '\n';
+  prompt += '- Ton de communication: ' + ton + '\n';
+  prompt += '- Particularite de l entreprise: ' + particulariteTexte + '\n';
+  prompt += '- Photos disponibles (a integrer en balise img): ' + photosTexte + '\n';
+  prompt += '- Formule commandee: ' + formule + '\n\n';
+  prompt += 'Regles de design (imperatives):\n';
+  prompt += '1. Choisis une paire de polices Google Fonts adaptee au secteur et au ton.\n';
+  prompt += '2. Cree UN element signature propre au secteur, pas une liste generique de 3 services avec icones.\n';
+  prompt += '3. Site 100% responsive avec menu mobile hamburger fonctionnel en JS natif, sous 768px.\n';
+  prompt += '4. Utilise les photos fournies en balise img, ne jamais laisser de zone vide.\n';
+  prompt += '5. Le texte doit refleter le ton demande et integrer la particularite comme element central.\n';
+  prompt += '6. Aucun prix affiche. Chaque section se termine par un bouton Demander un devis.\n';
+  prompt += '7. Aucun faux avis, fausse statistique ou fausse etude de cas.\n\n';
+  prompt += 'Structure selon la formule:\n';
+  prompt += 'Si formule est essentiel: site one-page en 4 sections (header simple, hero, services 3-4 elements, contact).\n';
+  prompt += 'Si formule est signature: site one-page enrichi en 7 sections (header et nav complete, hero, galerie photo, services detailles, element signature developpe, zones d intervention si pertinent, contact avec vrai formulaire).\n\n';
+  prompt += 'Format de sortie: Reponds UNIQUEMENT avec le code HTML complet, sans texte avant ou apres, sans balises markdown. Commence par la balise DOCTYPE html.';
+
+  return prompt;
+}
+
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Méthode non autorisée' });
+  }
+
+  try {
+    const body = req.body;
+    const nomEntreprise = body.nomEntreprise;
+    const secteur = body.secteur;
+    const ville = body.ville;
+    const paletteNom = body.paletteNom;
+    const paletteHex = body.paletteHex;
+    const ton = body.ton;
+    const particularite = body.particularite;
+    const formule = body.formule;
+    const photosUrls = body.photosUrls || [];
+
+    if (!nomEntreprise || !secteur || !ville || !formule) {
+      return res.status(400).json({ error: 'Champs obligatoires manquants' });
+    }
+
+    const clientIp = getClientIp(req);
+    const withinLimit = await checkRateLimit(clientIp);
+    if (!withinLimit) {
+      return res.status(429).json({
+        error: 'Vous avez atteint la limite de ' + MAX_GENERATIONS_PAR_JOUR + ' générations gratuites aujourd hui. Réessayez demain, ou contactez-nous directement.',
+      });
+    }
+
+    const clean = {
+      nomEntreprise: sanitizeInput(nomEntreprise, 100),
+      secteur: sanitizeInput(secteur, 100),
+      ville: sanitizeInput(ville, 100),
+      paletteNom: sanitizeInput(paletteNom, 50),
+      paletteHex: sanitizeInput(paletteHex, 200),
+      ton: sanitizeInput(ton, 50),
+      particularite: sanitizeInput(particularite, 300),
+      formule: formule === 'signature' ? 'signature' : 'essentiel',
+    };
+
+    let finalPhotos = Array.isArray(photosUrls) ? photosUrls.slice(0, 6) : [];
+    if (finalPhotos.length === 0) {
+      finalPhotos = await fetchPexelsPhotos(clean.secteur, clean.formule === 'signature' ? 4 : 1);
+    }
+
+    const systemPrompt = buildSystemPrompt({
+      nomEntreprise: clean.nomEntreprise,
+      secteur: clean.secteur,
+      ville: clean.ville,
+      paletteNom: clean.paletteNom,
+      paletteHex: clean.paletteHex,
+      ton: clean.ton,
+      particularite: clean.particularite,
+      photosUrls: finalPhotos,
+      formule: clean.formule,
+    });
+
+    const maxTokens = clean.formule === 'signature' ? 6000 : 3000;
+
+    const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-5',
+        max_tokens: maxTokens,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: 'Génère le site maintenant.' }],
+      }),
+    });
+
+    if (!claudeRes.ok) {
+      const errText = await claudeRes.text();
+      console.error('Erreur API Claude:', errText);
+      return res.status(502).json({ error: 'Erreur lors de la génération' });
+    }
+
+    const claudeData = await claudeRes.json();
+    let html = '';
+    if (claudeData.content && claudeData.content[0] && claudeData.content[0].text) {
+      html = claudeData.content[0].text;
+    }
+
+    const docTypeIndex = html.indexOf('<!DOCTYPE html>');
+    if (docTypeIndex > 0) html = html.slice(docTypeIndex);
+
+    let lead = null;
+    try {
+      const insertResult = await supabase
+        .from('prospects')
+        .insert({
+          nom_entreprise: clean.nomEntreprise,
+          secteur: clean.secteur,
+          ville: clean.ville,
+          formule: formule,
+          statut: 'generation_seule',
+          source: 'generateur_ia',
+        })
+        .select()
+        .single();
+      lead = insertResult.data;
+      if (insertResult.error) console.error('Erreur Supabase (non bloquante):', insertResult.error);
+    } catch (dbErr) {
+      console.error('Erreur Supabase (non bloquante):', dbErr);
+    }
+
+    await logGeneration(clientIp);
+
+    return res.status(200).json({ html: html, leadId: lead ? lead.id : null });
+  } catch (err) {
+    console.error('Erreur inattendue:', err);
+    return res.status(500).json({ error: 'Erreur serveur' });
+  }
+}
